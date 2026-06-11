@@ -1,0 +1,1 @@
+{"format":"AcidLab303Preset","version":1,"meta":{"name":"Fast 32","category":"Sequenced","author":"Zosia Audio","description":"Fast 1/32 sequencer setup for fills."},"parameters":{"cutoff":0.18,"resonance":0.7,"envMod":0.78,"decay":0.09,"accentAmount":0.78,"slideTime":0.16,"distMode":0.25,"drive":0.48,"patternLength":0.5,"seqRate":0.666667,"activePatternSlot":0.714285}}

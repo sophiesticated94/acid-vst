@@ -1,0 +1,15 @@
+{
+  "format": "AcidLab303PatternBank",
+  "version": 1,
+  "meta": {
+    "name": "Factory Acid Bank",
+    "author": "Zosia Audio",
+    "description": "Starter A-H acid pattern bank."
+  },
+  "settings": {
+    "scale": 4,
+    "length": 0,
+    "rate": 1
+  },
+  "patterns": []
+}
