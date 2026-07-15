@@ -8,6 +8,28 @@ namespace
 {
 constexpr auto stateId = "AcidLab303State";
 constexpr auto patternId = "Patterns";
+constexpr int engineExpansionStateVersion = 2;
+constexpr int currentStateVersion = 3;
+
+juce::String engineParameterId (int mode, char suffix)
+{
+    return acidlab::EngineControlBank::parameterId (mode, suffix - 'A');
+}
+
+juce::String lfoParameterId (int lfo, const juce::String& property)
+{
+    return "lfo" + juce::String (lfo + 1) + property;
+}
+
+juce::String envelopeParameterId (int envelope, const juce::String& property)
+{
+    return "env" + juce::String (envelope + 1) + property;
+}
+
+juce::String matrixParameterId (int slot, const juce::String& property)
+{
+    return "matrix" + juce::String (slot + 1) + property;
+}
 
 std::unique_ptr<juce::AudioParameterFloat> makeFloat (const juce::String& id,
                                                       const juce::String& name,
@@ -27,7 +49,8 @@ std::unique_ptr<juce::AudioParameterFloat> makeFloat (const juce::String& id,
 
 AcidLab303AudioProcessor::AcidLab303AudioProcessor()
     : AudioProcessor (BusesProperties().withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
-      apvts (*this, nullptr, stateId, createParameterLayout())
+      apvts (*this, nullptr, stateId, createParameterLayout()),
+      engineControlBank (apvts)
 {
     initializePattern();
 }
@@ -66,8 +89,52 @@ juce::AudioProcessorValueTreeState::ParameterLayout AcidLab303AudioProcessor::cr
     params.add (std::make_unique<juce::AudioParameterChoice> (
         juce::ParameterID { "distMode", 1 },
         "Distortion Mode",
-        juce::StringArray { "Warm", "Bite", "Fold", "Fuzz", "Zap" },
+        []
+        {
+            juce::StringArray choices;
+            for (const auto& engine : acidlab::getEngineDescriptors())
+                choices.add (engine.name);
+            return choices;
+        }(),
         0));
+    for (int mode = 0; mode < acidlab::engineCount; ++mode)
+    {
+        const auto& engine = acidlab::getEngineDescriptor (mode);
+        params.add (makeFloat (engineParameterId (mode, 'A'), juce::String (engine.name) + " " + engine.controlALabel, 0.0f, 1.0f, engine.defaults.a));
+        params.add (makeFloat (engineParameterId (mode, 'B'), juce::String (engine.name) + " " + engine.controlBLabel, 0.0f, 1.0f, engine.defaults.b));
+        params.add (makeFloat (engineParameterId (mode, 'C'), juce::String (engine.name) + " " + engine.controlCLabel, 0.0f, 1.0f, engine.defaults.c));
+    }
+    const juce::StringArray divisions { "8B", "4B", "2B", "1B", "1/2", "1/4", "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/32T" };
+    const juce::StringArray lfoShapes { "Sine", "Triangle", "Saw Up", "Saw Down", "Square", "S&H", "Smooth Random" };
+    for (int lfo = 0; lfo < acidlab::lfoCount; ++lfo)
+    {
+        const auto prefix = "LFO " + juce::String (lfo + 1) + " ";
+        params.add (makeFloat (lfoParameterId (lfo, "Rate"), prefix + "Rate", 0.01f, 30.0f, lfo == 0 ? 1.0f : 0.25f, "Hz"));
+        params.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { lfoParameterId (lfo, "Sync"), 1 }, prefix + "Sync", false));
+        params.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { lfoParameterId (lfo, "Division"), 1 }, prefix + "Division", divisions, 8));
+        params.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { lfoParameterId (lfo, "Shape"), 1 }, prefix + "Shape", lfoShapes, 0));
+        params.add (makeFloat (lfoParameterId (lfo, "Phase"), prefix + "Phase", 0.0f, 1.0f, 0.0f));
+        params.add (makeFloat (lfoParameterId (lfo, "Depth"), prefix + "Depth", 0.0f, 1.0f, 0.0f));
+    }
+    for (int envelope = 0; envelope < acidlab::envelopeCount; ++envelope)
+    {
+        const auto prefix = "Env " + juce::String (envelope + 1) + " ";
+        params.add (makeFloat (envelopeParameterId (envelope, "Attack"), prefix + "Attack", 0.001f, 5.0f, 0.02f, "s"));
+        params.add (makeFloat (envelopeParameterId (envelope, "Decay"), prefix + "Decay", 0.001f, 5.0f, 0.20f, "s"));
+        params.add (makeFloat (envelopeParameterId (envelope, "Sustain"), prefix + "Sustain", 0.0f, 1.0f, 0.70f));
+        params.add (makeFloat (envelopeParameterId (envelope, "Release"), prefix + "Release", 0.001f, 8.0f, 0.30f, "s"));
+        params.add (makeFloat (envelopeParameterId (envelope, "Amount"), prefix + "Amount", 0.0f, 1.0f, 0.0f));
+    }
+    const juce::StringArray sources { "LFO 1", "LFO 2", "LFO 3", "ENV 1", "ENV 2" };
+    const juce::StringArray targets { "Cutoff", "Resonance", "Env Mod", "Decay", "Accent", "Slide", "Pulse Width", "Drive", "Dist Tone", "Dist Mix",
+                                      "Delay Mix", "Delay Time", "FX Mod", "Reverb Mix", "FX Tone", "Noise", "Drift", "Volume", "Character A", "Character B", "Character C" };
+    for (int slot = 0; slot < acidlab::modulationSlotCount; ++slot)
+    {
+        const auto prefix = "Matrix " + juce::String (slot + 1) + " ";
+        params.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { matrixParameterId (slot, "Source"), 1 }, prefix + "Source", sources, 0));
+        params.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { matrixParameterId (slot, "Target"), 1 }, prefix + "Target", targets, 0));
+        params.add (makeFloat (matrixParameterId (slot, "Amount"), prefix + "Amount", -1.0f, 1.0f, 0.0f));
+    }
     params.add (makeFloat ("drive", "Drive", 0.0f, 1.0f, 0.42f));
     params.add (makeFloat ("distTone", "Dist Tone", 0.0f, 1.0f, 0.55f));
     params.add (makeFloat ("distMix", "Dist Mix", 0.0f, 1.0f, 0.48f));
@@ -200,6 +267,37 @@ acidlab::Parameters AcidLab303AudioProcessor::readParameters() const
     p.accentAttack = apvts.getRawParameterValue ("accentAttack")->load();
     p.clipLevel = apvts.getRawParameterValue ("clipLevel")->load();
     p.distMode = static_cast<int> (apvts.getRawParameterValue ("distMode")->load());
+    p.distMode = juce::jlimit (0, acidlab::engineCount - 1, p.distMode);
+    for (int mode = 0; mode < acidlab::engineCount; ++mode)
+    {
+        p.engineControls[static_cast<size_t> (mode)] = engineControlBank.getControls (mode);
+    }
+    for (int lfo = 0; lfo < acidlab::lfoCount; ++lfo)
+    {
+        auto& target = p.modulation.lfos[static_cast<size_t> (lfo)];
+        target.rateHz = apvts.getRawParameterValue (lfoParameterId (lfo, "Rate"))->load();
+        target.sync = apvts.getRawParameterValue (lfoParameterId (lfo, "Sync"))->load() >= 0.5f;
+        target.division = static_cast<int> (apvts.getRawParameterValue (lfoParameterId (lfo, "Division"))->load());
+        target.shape = static_cast<int> (apvts.getRawParameterValue (lfoParameterId (lfo, "Shape"))->load());
+        target.phase = apvts.getRawParameterValue (lfoParameterId (lfo, "Phase"))->load();
+        target.depth = apvts.getRawParameterValue (lfoParameterId (lfo, "Depth"))->load();
+    }
+    for (int envelope = 0; envelope < acidlab::envelopeCount; ++envelope)
+    {
+        auto& target = p.modulation.envelopes[static_cast<size_t> (envelope)];
+        target.attack = apvts.getRawParameterValue (envelopeParameterId (envelope, "Attack"))->load();
+        target.decay = apvts.getRawParameterValue (envelopeParameterId (envelope, "Decay"))->load();
+        target.sustain = apvts.getRawParameterValue (envelopeParameterId (envelope, "Sustain"))->load();
+        target.release = apvts.getRawParameterValue (envelopeParameterId (envelope, "Release"))->load();
+        target.amount = apvts.getRawParameterValue (envelopeParameterId (envelope, "Amount"))->load();
+    }
+    for (int slot = 0; slot < acidlab::modulationSlotCount; ++slot)
+    {
+        auto& target = p.modulation.slots[static_cast<size_t> (slot)];
+        target.source = static_cast<int> (apvts.getRawParameterValue (matrixParameterId (slot, "Source"))->load());
+        target.target = static_cast<acidlab::ModulationTarget> (apvts.getRawParameterValue (matrixParameterId (slot, "Target"))->load());
+        target.amount = apvts.getRawParameterValue (matrixParameterId (slot, "Amount"))->load();
+    }
     p.drive = apvts.getRawParameterValue ("drive")->load();
     p.distTone = apvts.getRawParameterValue ("distTone")->load();
     p.distMix = apvts.getRawParameterValue ("distMix")->load();
@@ -227,10 +325,22 @@ juce::AudioProcessorEditor* AcidLab303AudioProcessor::createEditor()
     return new AcidLab303AudioProcessorEditor (*this);
 }
 
+acidlab::EngineControls AcidLab303AudioProcessor::getEngineControls (int mode) const noexcept
+{
+    return engineControlBank.getControls (mode);
+}
+
+void AcidLab303AudioProcessor::setEngineControl (int mode, int control, float value)
+{
+    engineControlBank.setControl (mode, control, value);
+}
+
 void AcidLab303AudioProcessor::getStateInformation (juce::MemoryBlock& destData)
 {
     writePatternToState();
-    if (auto xml = apvts.copyState().createXml())
+    auto state = apvts.copyState();
+    state.setProperty ("stateVersion", currentStateVersion, nullptr);
+    if (auto xml = state.createXml())
         copyXmlToBinary (*xml, destData);
 }
 
@@ -240,6 +350,7 @@ void AcidLab303AudioProcessor::setStateInformation (const void* data, int sizeIn
     {
         if (xml->hasTagName (stateId))
         {
+            migrateLegacyState (*xml);
             apvts.replaceState (juce::ValueTree::fromXml (*xml));
             readPatternFromState();
         }
@@ -462,7 +573,7 @@ juce::var AcidLab303AudioProcessor::createPresetVar (const juce::String& name,
 {
     auto root = new juce::DynamicObject();
     root->setProperty ("format", "AcidLab303Preset");
-    root->setProperty ("version", 1);
+    root->setProperty ("version", currentStateVersion);
 
     auto meta = new juce::DynamicObject();
     meta->setProperty ("name", name);
@@ -489,6 +600,7 @@ bool AcidLab303AudioProcessor::applyPresetVar (const juce::var& preset)
     if (root == nullptr || root->getProperty ("format").toString() != "AcidLab303Preset")
         return false;
 
+    const auto presetVersion = static_cast<int> (root->getProperty ("version"));
     if (auto* params = root->getProperty ("parameters").getDynamicObject())
     {
         for (auto* parameter : getParameters())
@@ -498,8 +610,11 @@ bool AcidLab303AudioProcessor::applyPresetVar (const juce::var& preset)
                 const auto value = params->getProperty (ranged->paramID);
                 if (! value.isVoid())
                 {
+                    auto normalised = juce::jlimit (0.0f, 1.0f, static_cast<float> (static_cast<double> (value)));
+                    if (ranged->paramID == "distMode" && presetVersion < engineExpansionStateVersion)
+                        normalised = acidlab::migrateLegacyEngineValue (normalised);
                     ranged->beginChangeGesture();
-                    ranged->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, static_cast<float> (static_cast<double> (value))));
+                    ranged->setValueNotifyingHost (normalised);
                     ranged->endChangeGesture();
                 }
             }
@@ -508,6 +623,26 @@ bool AcidLab303AudioProcessor::applyPresetVar (const juce::var& preset)
 
     applyPatternSlotsVar (root->getProperty ("patterns"));
     return true;
+}
+
+void AcidLab303AudioProcessor::migrateLegacyState (juce::XmlElement& xml) const
+{
+    const auto stateVersion = xml.getIntAttribute ("stateVersion", 1);
+    if (stateVersion >= currentStateVersion)
+        return;
+
+    if (stateVersion < engineExpansionStateVersion)
+    {
+        for (auto* child : xml.getChildIterator())
+        {
+            if (child->getStringAttribute ("id") == "distMode")
+            {
+                const auto oldValue = child->getDoubleAttribute ("value", 0.0);
+                child->setAttribute ("value", acidlab::migrateLegacyEngineValue (static_cast<float> (oldValue)));
+            }
+        }
+    }
+    xml.setAttribute ("stateVersion", currentStateVersion);
 }
 
 juce::var AcidLab303AudioProcessor::createPatternSlotsVar() const

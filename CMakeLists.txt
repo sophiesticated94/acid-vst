@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.22)
 
-project(AcidLab303 VERSION 0.5.0 LANGUAGES C CXX)
+project(AcidLab303 VERSION 0.7.0 LANGUAGES C CXX)
 
 include(FetchContent)
 
@@ -34,6 +34,9 @@ juce_add_plugin(AcidLab303
 target_sources(AcidLab303
     PRIVATE
         src/dsp/AcidEngine.cpp
+        src/dsp/EngineDescriptor.cpp
+        src/dsp/Modulation.cpp
+        src/model/EngineControlBank.cpp
         src/model/MidiPatternExporter.cpp
         src/model/PatternBank.cpp
         src/plugin/PluginProcessor.cpp
@@ -65,6 +68,8 @@ enable_testing()
 add_executable(AcidLab303Tests
     tests/DspSmokeTest.cpp
     src/dsp/AcidEngine.cpp
+    src/dsp/EngineDescriptor.cpp
+    src/dsp/Modulation.cpp
     src/model/MidiPatternExporter.cpp
     src/model/PatternBank.cpp)
 

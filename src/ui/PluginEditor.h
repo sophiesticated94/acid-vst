@@ -4,10 +4,13 @@
 #include <juce_gui_extra/juce_gui_extra.h>
 
 #include "../plugin/PluginProcessor.h"
+#include "../dsp/EngineDescriptor.h"
 #include "AcidLookAndFeel.h"
 #include "EnergyStrip.h"
 #include "MidiDragButton.h"
 #include "StepGrid.h"
+
+#include <array>
 
 class AcidLab303AudioProcessorEditor final : public juce::AudioProcessorEditor,
                                              private juce::Timer
@@ -51,6 +54,9 @@ private:
     void selectTab (int index);
     void updateTabButtons();
     void updateVisibleTab();
+    void selectEngine (int mode);
+    void refreshEngineControls();
+    void syncEngineControlValues();
 
     AcidLab303AudioProcessor& processor;
     AcidLookAndFeel lookAndFeel;
@@ -110,6 +116,7 @@ private:
     juce::Slider noiseSlider;
     juce::Slider driftSlider;
     juce::Slider volumeSlider;
+    std::array<juce::Slider, acidlab::engineControlCount> engineControlSliders;
 
     juce::Label tuneLabel;
     juce::Label pulseWidthLabel;
@@ -136,6 +143,21 @@ private:
     juce::Label noiseLabel;
     juce::Label driftLabel;
     juce::Label volumeLabel;
+    std::array<juce::Label, acidlab::engineControlCount> engineControlLabels;
+
+    std::array<juce::Slider, acidlab::lfoCount> lfoRateSliders;
+    std::array<juce::Slider, acidlab::lfoCount> lfoPhaseSliders;
+    std::array<juce::Slider, acidlab::lfoCount> lfoDepthSliders;
+    std::array<juce::ToggleButton, acidlab::lfoCount> lfoSyncButtons;
+    std::array<juce::ComboBox, acidlab::lfoCount> lfoDivisionBoxes;
+    std::array<juce::ComboBox, acidlab::lfoCount> lfoShapeBoxes;
+    std::array<juce::Label, acidlab::lfoCount> lfoLabels;
+    std::array<std::array<juce::Slider, 5>, acidlab::envelopeCount> envelopeSliders;
+    std::array<juce::Label, acidlab::envelopeCount> envelopeLabels;
+    std::array<juce::ComboBox, acidlab::modulationSlotCount> matrixSourceBoxes;
+    std::array<juce::ComboBox, acidlab::modulationSlotCount> matrixTargetBoxes;
+    std::array<juce::Slider, acidlab::modulationSlotCount> matrixAmountSliders;
+    std::array<juce::Label, acidlab::modulationSlotCount> matrixRowLabels;
 
     juce::ToggleButton sequencerButton { "SEQ" };
     juce::ToggleButton fxDelayButton { "DLY" };
@@ -160,6 +182,7 @@ private:
     juce::TextButton modTabButton { "MOD" };
     juce::TextButton effectsTabButton { "EFFECTS" };
     juce::TextButton analogTabButton { "ANALOG" };
+    std::array<juce::TextButton, acidlab::engineCount> engineButtons;
 
     juce::Slider stepNoteSlider;
     juce::Slider stepOctaveSlider;
@@ -179,6 +202,8 @@ private:
     bool hasCurrentPreset = false;
     bool presetDirty = false;
     int currentTab = 0;
+    int lastEngineMode = -1;
+    bool updatingEngineControls = false;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (AcidLab303AudioProcessorEditor)
 };

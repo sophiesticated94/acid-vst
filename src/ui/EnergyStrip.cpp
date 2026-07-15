@@ -28,25 +28,65 @@ void EnergyStrip::paint (juce::Graphics& g)
     g.setGradientFill (glow);
     g.fillRoundedRectangle (bounds.reduced (3.0f), 4.0f);
 
-    juce::Path bolt;
+    juce::Path signal;
     const auto startX = bounds.getX() + 14.0f;
     const auto midY = bounds.getCentreY();
-    bolt.startNewSubPath (startX, midY);
+    signal.startNewSubPath (startX, midY);
 
     constexpr int segments = 13;
     for (int i = 1; i <= segments; ++i)
     {
         const auto t = static_cast<float> (i) / static_cast<float> (segments);
         const auto x = startX + t * (bounds.getWidth() - 28.0f);
-        const auto wobble = std::sin (time * (2.4f + mode * 0.31f) + t * 31.0f) * bounds.getHeight() * 0.18f;
-        const auto jag = std::sin (time * 9.0f + t * 67.0f + mode) * bounds.getHeight() * 0.11f;
-        bolt.lineTo (x, midY + wobble + jag);
+        auto y = midY;
+        switch (mode)
+        {
+            case 5: // Tube
+                y += std::sin (time * 2.0f + t * 12.0f) * bounds.getHeight() * (0.10f + intensity * 0.10f);
+                break;
+            case 6: // Crush
+                y += std::round (std::sin (time * 7.0f + t * 18.0f) * 3.0f) * bounds.getHeight() * 0.08f;
+                break;
+            case 7: // Melt
+                y += std::sin (time * 1.4f + t * 8.0f) * bounds.getHeight() * (0.18f + intensity * 0.14f);
+                break;
+            case 8: // Tape
+                y += std::sin (time * 1.1f + t * 16.0f + std::sin (time * 0.37f) * 2.0f) * bounds.getHeight() * 0.17f;
+                break;
+            case 9: // Ring
+                y += std::sin (time * (4.0f + intensity * 8.0f) + t * 40.0f) * bounds.getHeight() * 0.24f;
+                break;
+            case 10: // Shred
+                y += std::sin (time * 12.0f + t * 76.0f) * bounds.getHeight() * 0.23f;
+                break;
+            default:
+            {
+                const auto wobble = std::sin (time * (2.4f + mode * 0.31f) + t * 31.0f) * bounds.getHeight() * 0.18f;
+                const auto jag = std::sin (time * 9.0f + t * 67.0f + mode) * bounds.getHeight() * 0.11f;
+                y += wobble + jag;
+                break;
+            }
+        }
+        signal.lineTo (x, y);
     }
 
     g.setColour (theme.withAlpha (0.18f + intensity * 0.2f));
-    g.strokePath (bolt, juce::PathStrokeType (8.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.strokePath (signal, juce::PathStrokeType (8.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
     g.setColour (theme.withAlpha (0.62f + juce::jlimit (0.0f, 0.32f, intensity * 0.22f)));
-    g.strokePath (bolt, juce::PathStrokeType (2.2f + intensity, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.strokePath (signal, juce::PathStrokeType (2.2f + intensity, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+    if (mode == 5)
+    {
+        g.setColour (theme.withAlpha (0.20f + intensity * 0.24f));
+        for (int i = 0; i < 4; ++i)
+            g.fillEllipse (bounds.getX() + 28.0f + i * 34.0f, bounds.getCentreY() - 4.0f, 8.0f, 8.0f);
+    }
+    else if (mode == 9)
+    {
+        g.setColour (theme.withAlpha (0.26f + intensity * 0.20f));
+        g.drawEllipse (bounds.getCentreX() - 14.0f, bounds.getCentreY() - 14.0f, 28.0f, 28.0f, 1.4f);
+        g.drawEllipse (bounds.getCentreX() - 7.0f, bounds.getCentreY() - 7.0f, 14.0f, 14.0f, 1.2f);
+    }
     g.setColour (acidlab::ui::text.withAlpha (0.88f));
     g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
     g.drawText ("DISTORTION  " + editor.getThemeName(), getLocalBounds().reduced (14, 0), juce::Justification::centredLeft);

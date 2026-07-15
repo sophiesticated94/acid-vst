@@ -1,4 +1,6 @@
 #include "../src/dsp/AcidEngine.h"
+#include "../src/dsp/EngineDescriptor.h"
+#include "../src/dsp/Modulation.h"
 #include "../src/model/PatternBank.h"
 
 #include <juce_core/juce_core.h>
@@ -87,6 +89,110 @@ bool validatePatternBankRoundTrip()
     return true;
 }
 
+bool validateEngineDescriptors()
+{
+    const auto& descriptors = acidlab::getEngineDescriptors();
+    if (descriptors.size() != acidlab::engineCount)
+    {
+        std::cerr << "Unexpected engine descriptor count\n";
+        return false;
+    }
+
+    constexpr std::array<float, 5> legacyValues { 0.0f, 0.25f, 0.5f, 0.75f, 1.0f };
+    for (size_t index = 0; index < legacyValues.size(); ++index)
+    {
+        const auto migrated = acidlab::migrateLegacyEngineValue (legacyValues[index]);
+        const auto expected = acidlab::normalisedEngineValue (static_cast<int> (index));
+        if (std::abs (migrated - expected) > 0.0001f)
+        {
+            std::cerr << "Legacy engine migration changed mode " << index << "\n";
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool validateModulationSources()
+{
+    acidlab::ModulationEngine engine;
+    engine.prepare (48000.0);
+    acidlab::ModulationParameters parameters;
+    parameters.lfos[0].rateHz = 2.0f;
+    parameters.lfos[0].depth = 1.0f;
+    parameters.lfos[0].shape = 0;
+    parameters.lfos[1].sync = true;
+    parameters.lfos[1].division = 8;
+    parameters.lfos[1].depth = 1.0f;
+    parameters.envelopes[0].attack = 0.005f;
+    parameters.envelopes[0].decay = 0.030f;
+    parameters.envelopes[0].sustain = 0.45f;
+    parameters.envelopes[0].release = 0.020f;
+    parameters.envelopes[0].amount = 1.0f;
+
+    engine.noteOn();
+    float peak = 0.0f;
+    for (int i = 0; i < 6000; ++i)
+    {
+        const auto values = engine.next (parameters, 120.0);
+        for (const auto value : values)
+        {
+            if (! std::isfinite (value) || std::abs (value) > 1.001f)
+            {
+                std::cerr << "Modulation source out of bounds\n";
+                return false;
+            }
+        }
+        peak = std::max (peak, values[3]);
+    }
+
+    if (peak < 0.10f)
+    {
+        std::cerr << "Envelope did not rise after note on\n";
+        return false;
+    }
+
+    engine.noteOff();
+    float released = 1.0f;
+    for (int i = 0; i < 6000; ++i)
+        released = engine.next (parameters, 120.0)[3];
+    if (released > 0.05f)
+    {
+        std::cerr << "Envelope did not release after note off\n";
+        return false;
+    }
+
+    return true;
+}
+
+double renderEnergy (acidlab::Parameters parameters, const std::array<acidlab::Step, acidlab::maxSteps>& pattern);
+
+bool validateMatrixRouting(const std::array<acidlab::Step, acidlab::maxSteps>& pattern)
+{
+    acidlab::Parameters parameters;
+    parameters.bpm = 126.0;
+    parameters.cutoff = 900.0f;
+    parameters.resonance = 0.76f;
+    parameters.drive = 0.58f;
+    parameters.distMode = 7;
+    parameters.modulation.lfos[0].rateHz = 3.0f;
+    parameters.modulation.lfos[0].depth = 1.0f;
+    parameters.modulation.envelopes[0].attack = 0.01f;
+    parameters.modulation.envelopes[0].amount = 1.0f;
+    parameters.modulation.slots[0] = { 0, acidlab::ModulationTarget::cutoff, 0.8f };
+    parameters.modulation.slots[1] = { 3, acidlab::ModulationTarget::engineCharacterA, -0.65f };
+    parameters.modulation.slots[2] = { 0, acidlab::ModulationTarget::distMix, 0.5f };
+
+    const auto energy = renderEnergy (parameters, pattern);
+    if (energy < 1.0)
+    {
+        std::cerr << "Matrix routing produced invalid output\n";
+        return false;
+    }
+
+    return true;
+}
+
 double renderEnergy (acidlab::Parameters parameters, const std::array<acidlab::Step, acidlab::maxSteps>& pattern)
 {
     acidlab::AcidEngine engine;
@@ -164,21 +270,26 @@ int main()
     {
         for (int oversampling = 0; oversampling < 3; ++oversampling)
         {
-            for (int mode = 0; mode < 5; ++mode)
+            for (int mode = 0; mode < acidlab::engineCount; ++mode)
             {
-                auto p = parameters;
-                p.filterModel = filterModel;
-                p.oversampling = oversampling;
-                p.distMode = mode;
-                p.cutoff = 7800.0f;
-                p.resonance = 0.96f;
-                const auto testEnergy = renderEnergy (p, pattern);
-                if (testEnergy < 1.0)
+                for (const auto controlValue : { 0.0f, 1.0f })
                 {
-                    std::cerr << "Invalid energy for filter " << filterModel
-                              << ", oversampling " << oversampling
-                              << ", mode " << mode << "\n";
-                    return 1;
+                    auto p = parameters;
+                    p.filterModel = filterModel;
+                    p.oversampling = oversampling;
+                    p.distMode = mode;
+                    p.engineControls[static_cast<size_t> (mode)] = { controlValue, controlValue, controlValue };
+                    p.cutoff = 7800.0f;
+                    p.resonance = 0.96f;
+                    const auto testEnergy = renderEnergy (p, pattern);
+                    if (testEnergy < 1.0)
+                    {
+                        std::cerr << "Invalid energy for filter " << filterModel
+                                  << ", oversampling " << oversampling
+                                  << ", mode " << mode
+                                  << ", control " << controlValue << "\n";
+                        return 1;
+                    }
                 }
             }
         }
@@ -187,6 +298,12 @@ int main()
     if (! validateFactoryPresets())
         return 1;
     if (! validatePatternBankRoundTrip())
+        return 1;
+    if (! validateEngineDescriptors())
+        return 1;
+    if (! validateModulationSources())
+        return 1;
+    if (! validateMatrixRouting (pattern))
         return 1;
 
     std::cout << "AcidLab303 DSP smoke test passed\n";

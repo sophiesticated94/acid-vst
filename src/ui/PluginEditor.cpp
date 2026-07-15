@@ -17,6 +17,21 @@ void styleTabButton (juce::TextButton& button)
     styleButton (button);
     button.setClickingTogglesState (false);
 }
+
+juce::String lfoParameterId (int lfo, const juce::String& property)
+{
+    return "lfo" + juce::String (lfo + 1) + property;
+}
+
+juce::String envelopeParameterId (int envelope, const juce::String& property)
+{
+    return "env" + juce::String (envelope + 1) + property;
+}
+
+juce::String matrixParameterId (int slot, const juce::String& property)
+{
+    return "matrix" + juce::String (slot + 1) + property;
+}
 } // namespace
 
 AcidLab303AudioProcessorEditor::AcidLab303AudioProcessorEditor (AcidLab303AudioProcessor& p)
@@ -48,12 +63,14 @@ AcidLab303AudioProcessorEditor::AcidLab303AudioProcessorEditor (AcidLab303AudioP
     comboAttachments.push_back (std::make_unique<ComboAttachment> (state, "patternLength", lengthBox));
 
     addCombo (distModeBox, distModeLabel, "DIST");
-    distModeBox.addItem ("WARM", 1);
-    distModeBox.addItem ("BITE", 2);
-    distModeBox.addItem ("FOLD", 3);
-    distModeBox.addItem ("FUZZ", 4);
-    distModeBox.addItem ("ZAP", 5);
+    for (int mode = 0; mode < acidlab::engineCount; ++mode)
+        distModeBox.addItem (juce::String (acidlab::getEngineDescriptor (mode).name).toUpperCase(), mode + 1);
     comboAttachments.push_back (std::make_unique<ComboAttachment> (state, "distMode", distModeBox));
+    distModeBox.onChange = [this]
+    {
+        refreshEngineControls();
+        markDirty();
+    };
 
     addCombo (filterModelBox, filterModelLabel, "FILTER");
     filterModelBox.addItem ("CLEAN", 1);
@@ -146,6 +163,20 @@ AcidLab303AudioProcessorEditor::AcidLab303AudioProcessorEditor (AcidLab303AudioP
     addKnob (noiseSlider, noiseLabel, "NOISE");
     addKnob (driftSlider, driftLabel, "DRIFT");
     addKnob (volumeSlider, volumeLabel, "VOL");
+    for (int control = 0; control < acidlab::engineControlCount; ++control)
+    {
+        addKnob (engineControlSliders[static_cast<size_t> (control)],
+                 engineControlLabels[static_cast<size_t> (control)],
+                 "CHAR");
+        engineControlSliders[static_cast<size_t> (control)].onValueChange = [this, control]
+        {
+            if (! updatingEngineControls && lastEngineMode >= 0)
+            {
+                processor.setEngineControl (lastEngineMode, control, static_cast<float> (engineControlSliders[static_cast<size_t> (control)].getValue()));
+                markDirty();
+            }
+        };
+    }
 
     sliderAttachments.push_back (std::make_unique<SliderAttachment> (state, "tune", tuneSlider));
     sliderAttachments.push_back (std::make_unique<SliderAttachment> (state, "pulseWidth", pulseWidthSlider));
@@ -172,6 +203,77 @@ AcidLab303AudioProcessorEditor::AcidLab303AudioProcessorEditor (AcidLab303AudioP
     sliderAttachments.push_back (std::make_unique<SliderAttachment> (state, "noise", noiseSlider));
     sliderAttachments.push_back (std::make_unique<SliderAttachment> (state, "drift", driftSlider));
     sliderAttachments.push_back (std::make_unique<SliderAttachment> (state, "volume", volumeSlider));
+
+    const juce::StringArray divisions { "8B", "4B", "2B", "1B", "1/2", "1/4", "1/8", "1/8T", "1/16", "1/16T", "1/32", "1/32T" };
+    const juce::StringArray shapes { "SIN", "TRI", "UP", "DOWN", "SQR", "S&H", "RND" };
+    for (int lfo = 0; lfo < acidlab::lfoCount; ++lfo)
+    {
+        const auto index = static_cast<size_t> (lfo);
+        lfoLabels[index].setText ("LFO " + juce::String (lfo + 1), juce::dontSendNotification);
+        lfoLabels[index].setJustificationType (juce::Justification::centredLeft);
+        addAndMakeVisible (lfoLabels[index]);
+        for (auto* slider : { &lfoRateSliders[index], &lfoPhaseSliders[index], &lfoDepthSliders[index] })
+        {
+            slider->setSliderStyle (juce::Slider::LinearHorizontal);
+            slider->setTextBoxStyle (juce::Slider::TextBoxRight, false, 44, 18);
+            slider->onValueChange = [this] { markDirty(); };
+            addAndMakeVisible (*slider);
+        }
+        lfoSyncButtons[index].setButtonText ("SYNC");
+        addToggle (lfoSyncButtons[index]);
+        for (int item = 0; item < divisions.size(); ++item) lfoDivisionBoxes[index].addItem (divisions[item], item + 1);
+        for (int item = 0; item < shapes.size(); ++item) lfoShapeBoxes[index].addItem (shapes[item], item + 1);
+        addAndMakeVisible (lfoDivisionBoxes[index]);
+        addAndMakeVisible (lfoShapeBoxes[index]);
+        comboAttachments.push_back (std::make_unique<ComboAttachment> (state, lfoParameterId (lfo, "Division"), lfoDivisionBoxes[index]));
+        comboAttachments.push_back (std::make_unique<ComboAttachment> (state, lfoParameterId (lfo, "Shape"), lfoShapeBoxes[index]));
+        buttonAttachments.push_back (std::make_unique<ButtonAttachment> (state, lfoParameterId (lfo, "Sync"), lfoSyncButtons[index]));
+        sliderAttachments.push_back (std::make_unique<SliderAttachment> (state, lfoParameterId (lfo, "Rate"), lfoRateSliders[index]));
+        sliderAttachments.push_back (std::make_unique<SliderAttachment> (state, lfoParameterId (lfo, "Phase"), lfoPhaseSliders[index]));
+        sliderAttachments.push_back (std::make_unique<SliderAttachment> (state, lfoParameterId (lfo, "Depth"), lfoDepthSliders[index]));
+    }
+
+    constexpr std::array<const char*, 5> envelopeNames { "A", "D", "S", "R", "AMT" };
+    constexpr std::array<const char*, 5> envelopeProperties { "Attack", "Decay", "Sustain", "Release", "Amount" };
+    for (int envelope = 0; envelope < acidlab::envelopeCount; ++envelope)
+    {
+        const auto envIndex = static_cast<size_t> (envelope);
+        envelopeLabels[envIndex].setText ("ENV " + juce::String (envelope + 1), juce::dontSendNotification);
+        envelopeLabels[envIndex].setJustificationType (juce::Justification::centredLeft);
+        addAndMakeVisible (envelopeLabels[envIndex]);
+        for (int control = 0; control < 5; ++control)
+        {
+            auto& slider = envelopeSliders[envIndex][static_cast<size_t> (control)];
+            slider.setSliderStyle (juce::Slider::LinearHorizontal);
+            slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 40, 18);
+            slider.setTooltip (envelopeNames[static_cast<size_t> (control)]);
+            slider.onValueChange = [this] { markDirty(); };
+            addAndMakeVisible (slider);
+            sliderAttachments.push_back (std::make_unique<SliderAttachment> (state, envelopeParameterId (envelope, envelopeProperties[static_cast<size_t> (control)]), slider));
+        }
+    }
+
+    const juce::StringArray sources { "LFO 1", "LFO 2", "LFO 3", "ENV 1", "ENV 2" };
+    const juce::StringArray targets { "CUTOFF", "RES", "ENV", "DECAY", "ACC", "SLIDE", "PW", "DRIVE", "D TONE", "D MIX",
+                                      "DLY MIX", "DLY TIME", "FX MOD", "RVB", "FX TONE", "NOISE", "DRIFT", "VOL", "CHAR A", "CHAR B", "CHAR C" };
+    for (int slot = 0; slot < acidlab::modulationSlotCount; ++slot)
+    {
+        const auto index = static_cast<size_t> (slot);
+        matrixRowLabels[index].setText ("M" + juce::String (slot + 1), juce::dontSendNotification);
+        matrixRowLabels[index].setJustificationType (juce::Justification::centred);
+        addAndMakeVisible (matrixRowLabels[index]);
+        for (int item = 0; item < sources.size(); ++item) matrixSourceBoxes[index].addItem (sources[item], item + 1);
+        for (int item = 0; item < targets.size(); ++item) matrixTargetBoxes[index].addItem (targets[item], item + 1);
+        addAndMakeVisible (matrixSourceBoxes[index]);
+        addAndMakeVisible (matrixTargetBoxes[index]);
+        matrixAmountSliders[index].setSliderStyle (juce::Slider::LinearHorizontal);
+        matrixAmountSliders[index].setTextBoxStyle (juce::Slider::TextBoxRight, false, 44, 18);
+        matrixAmountSliders[index].onValueChange = [this] { markDirty(); };
+        addAndMakeVisible (matrixAmountSliders[index]);
+        comboAttachments.push_back (std::make_unique<ComboAttachment> (state, matrixParameterId (slot, "Source"), matrixSourceBoxes[index]));
+        comboAttachments.push_back (std::make_unique<ComboAttachment> (state, matrixParameterId (slot, "Target"), matrixTargetBoxes[index]));
+        sliderAttachments.push_back (std::make_unique<SliderAttachment> (state, matrixParameterId (slot, "Amount"), matrixAmountSliders[index]));
+    }
 
     addAndMakeVisible (stepGrid);
     addAndMakeVisible (energyStrip);
@@ -201,6 +303,14 @@ AcidLab303AudioProcessorEditor::AcidLab303AudioProcessorEditor (AcidLab303AudioP
     styleButton (saveAsPresetButton);
     styleButton (patternLoadButton);
     styleButton (patternSaveButton);
+    for (int mode = 0; mode < acidlab::engineCount; ++mode)
+    {
+        auto& button = engineButtons[static_cast<size_t> (mode)];
+        button.setButtonText (juce::String (acidlab::getEngineDescriptor (mode).name).toUpperCase());
+        styleTabButton (button);
+        button.onClick = [this, mode] { selectEngine (mode); };
+        addAndMakeVisible (button);
+    }
     for (auto* button : { &synthTabButton, &sequencerTabButton, &modTabButton, &effectsTabButton, &analogTabButton })
     {
         styleTabButton (*button);
@@ -326,6 +436,7 @@ AcidLab303AudioProcessorEditor::AcidLab303AudioProcessorEditor (AcidLab303AudioP
     getConstrainer()->setFixedAspectRatio (1160.0 / 860.0);
     setSize (1160, 860);
     refreshPresetList();
+    refreshEngineControls();
     updateTabButtons();
     updateVisibleTab();
     updatePresetMetaLabel();
@@ -370,7 +481,7 @@ void AcidLab303AudioProcessorEditor::paint (juce::Graphics& g)
 
     drawPanel (sidebar, "PRESETS", theme);
 
-    auto engine = content.removeFromTop (58);
+    auto engine = content.removeFromTop (70);
     drawPanel (engine, "ENGINE / THEME", theme);
     content.removeFromTop (10);
     auto tabs = content.removeFromTop (42);
@@ -417,11 +528,13 @@ void AcidLab303AudioProcessorEditor::resized()
     sidebar.removeFromTop (8);
     presetMetaLabel.setBounds (sidebar);
 
-    auto engine = area.removeFromTop (58).reduced (12, 10);
-    distModeLabel.setBounds (engine.removeFromLeft (62));
-    distModeBox.setBounds (engine.removeFromLeft (132).reduced (3));
-    engine.removeFromLeft (18);
-    energyStrip.setBounds (engine);
+    auto engine = area.removeFromTop (70).reduced (12, 22);
+    distModeLabel.setBounds (-4000, -4000, 10, 10);
+    distModeBox.setBounds (-4000, -4000, 10, 10);
+    const auto engineButtonWidth = engine.getWidth() / acidlab::engineCount;
+    for (int mode = 0; mode < acidlab::engineCount; ++mode)
+        engineButtons[static_cast<size_t> (mode)].setBounds (engine.removeFromLeft (engineButtonWidth).reduced (2));
+    energyStrip.setBounds (area.removeFromTop (46).reduced (12, 3));
     area.removeFromTop (10);
 
     auto tabs = area.removeFromTop (42).reduced (8, 7);
@@ -470,6 +583,37 @@ void AcidLab303AudioProcessorEditor::resized()
     };
     for (auto* c : tabComponents)
         hideControl (*c);
+    for (int control = 0; control < acidlab::engineControlCount; ++control)
+    {
+        hideControl (engineControlSliders[static_cast<size_t> (control)]);
+        hideControl (engineControlLabels[static_cast<size_t> (control)]);
+    }
+    for (int lfo = 0; lfo < acidlab::lfoCount; ++lfo)
+    {
+        const auto index = static_cast<size_t> (lfo);
+        hideControl (lfoLabels[index]);
+        hideControl (lfoRateSliders[index]);
+        hideControl (lfoPhaseSliders[index]);
+        hideControl (lfoDepthSliders[index]);
+        hideControl (lfoSyncButtons[index]);
+        hideControl (lfoDivisionBoxes[index]);
+        hideControl (lfoShapeBoxes[index]);
+    }
+    for (int envelope = 0; envelope < acidlab::envelopeCount; ++envelope)
+    {
+        const auto index = static_cast<size_t> (envelope);
+        hideControl (envelopeLabels[index]);
+        for (auto& slider : envelopeSliders[index])
+            hideControl (slider);
+    }
+    for (int slot = 0; slot < acidlab::modulationSlotCount; ++slot)
+    {
+        const auto index = static_cast<size_t> (slot);
+        hideControl (matrixRowLabels[index]);
+        hideControl (matrixSourceBoxes[index]);
+        hideControl (matrixTargetBoxes[index]);
+        hideControl (matrixAmountSliders[index]);
+    }
 
     if (currentTab == 0)
     {
@@ -521,18 +665,57 @@ void AcidLab303AudioProcessorEditor::resized()
     }
     else if (currentTab == 2)
     {
-        placeKnobRow (panelArea, { { &mutationSlider, &mutationLabel }, { &envModSlider, &envModLabel }, { &accentSlider, &accentLabel }, { &slideSlider, &slideLabel } });
-        placeKnobRow (panelArea, { { &decaySlider, &decayLabel }, { &accentAttackSlider, &accentAttackLabel } });
+        auto lfoArea = panelArea.removeFromTop (156);
+        const auto lfoWidth = lfoArea.getWidth() / acidlab::lfoCount;
+        for (int lfo = 0; lfo < acidlab::lfoCount; ++lfo)
+        {
+            const auto index = static_cast<size_t> (lfo);
+            auto column = lfoArea.removeFromLeft (lfoWidth).reduced (4);
+            lfoLabels[index].setBounds (column.removeFromTop (18));
+            auto choices = column.removeFromTop (24);
+            lfoShapeBoxes[index].setBounds (choices.removeFromLeft (choices.getWidth() / 2).reduced (2));
+            lfoDivisionBoxes[index].setBounds (choices.reduced (2));
+            lfoSyncButtons[index].setBounds (column.removeFromTop (20));
+            lfoRateSliders[index].setBounds (column.removeFromTop (25));
+            lfoPhaseSliders[index].setBounds (column.removeFromTop (25));
+            lfoDepthSliders[index].setBounds (column.removeFromTop (25));
+        }
+        panelArea.removeFromTop (6);
+        auto envArea = panelArea.removeFromTop (128);
+        const auto envWidth = envArea.getWidth() / acidlab::envelopeCount;
+        for (int envelope = 0; envelope < acidlab::envelopeCount; ++envelope)
+        {
+            const auto index = static_cast<size_t> (envelope);
+            auto column = envArea.removeFromLeft (envWidth).reduced (4);
+            envelopeLabels[index].setBounds (column.removeFromTop (18));
+            for (auto& slider : envelopeSliders[index])
+                slider.setBounds (column.removeFromTop (20));
+        }
+        panelArea.removeFromTop (6);
+        const auto matrixRowHeight = juce::jmax (24, panelArea.getHeight() / acidlab::modulationSlotCount);
+        for (int slot = 0; slot < acidlab::modulationSlotCount; ++slot)
+        {
+            const auto index = static_cast<size_t> (slot);
+            auto row = panelArea.removeFromTop (matrixRowHeight).reduced (2, 1);
+            matrixRowLabels[index].setBounds (row.removeFromLeft (28));
+            matrixSourceBoxes[index].setBounds (row.removeFromLeft (84).reduced (2));
+            matrixTargetBoxes[index].setBounds (row.removeFromLeft (116).reduced (2));
+            matrixAmountSliders[index].setBounds (row.reduced (2));
+        }
     }
     else if (currentTab == 3)
     {
-        placeKnobRow (panelArea, { { &driveSlider, &driveLabel }, { &toneSlider, &toneLabel }, { &mixSlider, &mixLabel }, { &fxToneSlider, &fxToneLabel } });
+        placeKnobRow (panelArea, { { &driveSlider, &driveLabel }, { &toneSlider, &toneLabel }, { &mixSlider, &mixLabel },
+                                   { &engineControlSliders[0], &engineControlLabels[0] }, { &engineControlSliders[1], &engineControlLabels[1] },
+                                   { &engineControlSliders[2], &engineControlLabels[2] } });
         auto toggles = panelArea.removeFromTop (42);
         fxDelayButton.setBounds (toggles.removeFromLeft (76).reduced (4));
         fxModButton.setBounds (toggles.removeFromLeft (76).reduced (4));
         fxReverbButton.setBounds (toggles.removeFromLeft (76).reduced (4));
         panelArea.removeFromTop (14);
-        placeKnobRow (panelArea, { { &fxDelayMixSlider, &fxDelayMixLabel }, { &fxDelayTimeSlider, &fxDelayTimeLabel }, { &fxModDepthSlider, &fxModDepthLabel }, { &fxReverbMixSlider, &fxReverbMixLabel } });
+        placeKnobRow (panelArea, { { &fxDelayMixSlider, &fxDelayMixLabel }, { &fxDelayTimeSlider, &fxDelayTimeLabel },
+                                   { &fxModDepthSlider, &fxModDepthLabel }, { &fxReverbMixSlider, &fxReverbMixLabel },
+                                   { &fxToneSlider, &fxToneLabel } });
     }
     else
     {
@@ -548,6 +731,10 @@ void AcidLab303AudioProcessorEditor::resized()
 void AcidLab303AudioProcessorEditor::timerCallback()
 {
     const auto theme = getThemeColour();
+    if (getDistortionMode() != lastEngineMode)
+        refreshEngineControls();
+    else
+        syncEngineControlValues();
     lookAndFeel.setColour (juce::Slider::rotarySliderFillColourId, theme);
     lookAndFeel.setColour (juce::ToggleButton::tickColourId, theme);
     juce::TextButton* tabButtons[] = { &synthTabButton, &sequencerTabButton, &modTabButton, &effectsTabButton, &analogTabButton };
@@ -557,6 +744,8 @@ void AcidLab303AudioProcessorEditor::timerCallback()
                                           &copyButton, &pasteButton, &clearButton, &exportButton, &patternLoadButton, &patternSaveButton };
     for (auto* button : themedButtons)
         button->setColour (juce::TextButton::buttonOnColourId, theme.withAlpha (0.7f));
+    for (int mode = 0; mode < acidlab::engineCount; ++mode)
+        engineButtons[static_cast<size_t> (mode)].setToggleState (mode == getDistortionMode(), juce::dontSendNotification);
     stepGrid.repaint();
     energyStrip.repaint();
     repaint();
@@ -593,33 +782,62 @@ void AcidLab303AudioProcessorEditor::addToggle (juce::ToggleButton& button)
 int AcidLab303AudioProcessorEditor::getDistortionMode() const
 {
     if (auto* value = processor.getValueTreeState().getRawParameterValue ("distMode"))
-        return juce::jlimit (0, 4, static_cast<int> (value->load()));
+        return juce::jlimit (0, acidlab::engineCount - 1, static_cast<int> (value->load()));
 
     return 0;
 }
 
 juce::Colour AcidLab303AudioProcessorEditor::getThemeColour() const
 {
-    switch (getDistortionMode())
-    {
-        case 1: return juce::Colour::fromRGB (255, 124, 62);
-        case 2: return juce::Colour::fromRGB (78, 222, 255);
-        case 3: return juce::Colour::fromRGB (238, 82, 255);
-        case 4: return juce::Colour::fromRGB (255, 235, 76);
-        default: return defaultAcid;
-    }
+    const auto& engine = acidlab::getEngineDescriptor (getDistortionMode());
+    return juce::Colour::fromRGB (engine.red, engine.green, engine.blue);
 }
 
 juce::String AcidLab303AudioProcessorEditor::getThemeName() const
 {
-    switch (getDistortionMode())
+    return juce::String (acidlab::getEngineDescriptor (getDistortionMode()).name).toUpperCase();
+}
+
+void AcidLab303AudioProcessorEditor::selectEngine (int mode)
+{
+    if (auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (processor.getValueTreeState().getParameter ("distMode")))
     {
-        case 1: return "BITE";
-        case 2: return "FOLD";
-        case 3: return "FUZZ";
-        case 4: return "ZAP";
-        default: return "WARM";
+        parameter->beginChangeGesture();
+        parameter->setValueNotifyingHost (acidlab::normalisedEngineValue (mode));
+        parameter->endChangeGesture();
     }
+
+    refreshEngineControls();
+    markDirty();
+}
+
+void AcidLab303AudioProcessorEditor::refreshEngineControls()
+{
+    const auto mode = getDistortionMode();
+    const auto& engine = acidlab::getEngineDescriptor (mode);
+    const char* labels[] = { engine.controlALabel, engine.controlBLabel, engine.controlCLabel };
+    for (int control = 0; control < acidlab::engineControlCount; ++control)
+    {
+        const auto index = static_cast<size_t> (control);
+        engineControlLabels[index].setText (labels[index], juce::dontSendNotification);
+    }
+
+    lastEngineMode = mode;
+    syncEngineControlValues();
+    resized();
+}
+
+void AcidLab303AudioProcessorEditor::syncEngineControlValues()
+{
+    if (lastEngineMode < 0)
+        return;
+
+    const auto controls = processor.getEngineControls (lastEngineMode);
+    const float values[] = { controls.a, controls.b, controls.c };
+    updatingEngineControls = true;
+    for (int control = 0; control < acidlab::engineControlCount; ++control)
+        engineControlSliders[static_cast<size_t> (control)].setValue (values[static_cast<size_t> (control)], juce::dontSendNotification);
+    updatingEngineControls = false;
 }
 
 void AcidLab303AudioProcessorEditor::selectStep (int index)

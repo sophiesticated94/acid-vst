@@ -16,6 +16,7 @@ void AcidEngine::prepare (double newSampleRate)
     delayLine.prepare (sampleRate);
     reverbLineA.prepare (sampleRate);
     reverbLineB.prepare (sampleRate);
+    modulationEngine.prepare (sampleRate);
     reset();
 }
 
@@ -32,6 +33,12 @@ void AcidEngine::reset()
     accentPulse = 0.0f;
     outputLevel = 0.0f;
     accentMeter = 0.0f;
+    crushHeldSample = 0.0f;
+    crushSamplesUntilUpdate = 0;
+    meltState = 0.0f;
+    tapePhase = 0.0f;
+    ringPhase = 0.0f;
+    modulationEngine.reset();
     gateOpen = false;
     slideActive = false;
     externalHeld = false;
@@ -63,12 +70,14 @@ void AcidEngine::noteOn (int midiNote, float velocity, bool slide, bool accented
     gateOpen = true;
     slideActive = slide;
     externalHeld = true;
+    modulationEngine.noteOn();
 }
 
 void AcidEngine::noteOff()
 {
     externalHeld = false;
     gateOpen = false;
+    modulationEngine.noteOff();
 }
 
 void AcidEngine::render (float* left,
@@ -116,6 +125,7 @@ void AcidEngine::triggerStep (const Step& step, const Parameters& parameters)
         gateOpen = false;
         slideActive = false;
         accent = 0.0f;
+        modulationEngine.noteOff();
         return;
     }
 
@@ -131,26 +141,71 @@ void AcidEngine::triggerStep (const Step& step, const Parameters& parameters)
     accentPulse = accent;
     gateOpen = true;
     slideActive = step.slide;
+    modulationEngine.noteOn();
 }
 
 float AcidEngine::renderSample (const Parameters& parameters)
 {
+    const auto modulatedParameters = applyModulation (parameters, modulationEngine.next (parameters.modulation, parameters.bpm));
     const auto osFactor = getOversamplingFactor (parameters.oversampling);
     const auto effectiveSampleRate = sampleRate * static_cast<double> (osFactor);
 
     auto sum = 0.0f;
     for (int i = 0; i < osFactor; ++i)
-        sum += renderVoiceSubSample (parameters, effectiveSampleRate);
+        sum += renderVoiceSubSample (modulatedParameters, effectiveSampleRate);
 
     auto sample = sum / static_cast<float> (osFactor);
-    sample = applyEffects (sample, parameters);
-    sample = softClip (sample * parameters.volume * 0.72f);
+    sample = applyEffects (sample, modulatedParameters);
+    sample = softClip (sample * modulatedParameters.volume * 0.72f);
 
     outputLevel += 0.0065f * (std::abs (sample) - outputLevel);
     accentMeter += 0.008f * (accentPulse - accentMeter);
     accentPulse *= std::exp (-1.0f / (0.09f * static_cast<float> (sampleRate)));
 
     return sample;
+}
+
+Parameters AcidEngine::applyModulation (const Parameters& base, const std::array<float, modulationSourceCount>& sources) const
+{
+    auto result = base;
+    const auto applyUnit = [] (float& value, float delta)
+    {
+        value = clamp (value + delta, 0.0f, 1.0f);
+    };
+
+    for (const auto& slot : base.modulation.slots)
+    {
+        const auto source = clamp (static_cast<float> (slot.source), 0.0f, static_cast<float> (modulationSourceCount - 1));
+        const auto sourceValue = sources[static_cast<size_t> (static_cast<int> (source))];
+        const auto delta = sourceValue * clamp (slot.amount, -1.0f, 1.0f);
+        switch (slot.target)
+        {
+            case ModulationTarget::cutoff: result.cutoff = clamp (result.cutoff + delta * 5500.0f, 35.0f, 9000.0f); break;
+            case ModulationTarget::resonance: applyUnit (result.resonance, delta * 0.50f); break;
+            case ModulationTarget::envMod: applyUnit (result.envMod, delta * 0.70f); break;
+            case ModulationTarget::decay: result.decay = clamp (result.decay + delta * 1.0f, 0.035f, 1.8f); break;
+            case ModulationTarget::accent: applyUnit (result.accentAmount, delta * 0.70f); break;
+            case ModulationTarget::slide: result.slideTime = clamp (result.slideTime + delta * 0.22f, 0.005f, 0.45f); break;
+            case ModulationTarget::pulseWidth: result.pulseWidth = clamp (result.pulseWidth + delta * 0.38f, 0.08f, 0.92f); break;
+            case ModulationTarget::drive: applyUnit (result.drive, delta * 0.75f); break;
+            case ModulationTarget::distTone: applyUnit (result.distTone, delta * 0.75f); break;
+            case ModulationTarget::distMix: applyUnit (result.distMix, delta * 0.75f); break;
+            case ModulationTarget::delayMix: result.fxDelayMix = clamp (result.fxDelayMix + delta * 0.65f, 0.0f, 0.8f); break;
+            case ModulationTarget::delayTime: result.fxDelayTime = clamp (result.fxDelayTime + delta * 0.45f, 0.04f, 0.75f); break;
+            case ModulationTarget::fxModDepth: applyUnit (result.fxModDepth, delta * 0.75f); break;
+            case ModulationTarget::reverbMix: result.fxReverbMix = clamp (result.fxReverbMix + delta * 0.60f, 0.0f, 0.75f); break;
+            case ModulationTarget::fxTone: applyUnit (result.fxTone, delta * 0.75f); break;
+            case ModulationTarget::noise: result.noise = clamp (result.noise + delta * 0.05f, 0.0f, 0.08f); break;
+            case ModulationTarget::drift: applyUnit (result.drift, delta * 0.80f); break;
+            case ModulationTarget::volume: applyUnit (result.volume, delta * 0.50f); break;
+            case ModulationTarget::engineCharacterA: applyUnit (result.engineControls[static_cast<size_t> (result.distMode)].a, delta * 0.70f); break;
+            case ModulationTarget::engineCharacterB: applyUnit (result.engineControls[static_cast<size_t> (result.distMode)].b, delta * 0.70f); break;
+            case ModulationTarget::engineCharacterC: applyUnit (result.engineControls[static_cast<size_t> (result.distMode)].c, delta * 0.70f); break;
+            default: break;
+        }
+    }
+
+    return result;
 }
 
 float AcidEngine::renderVoiceSubSample (const Parameters& parameters, double effectiveSampleRate)
@@ -206,8 +261,13 @@ float AcidEngine::renderVoiceSubSample (const Parameters& parameters, double eff
     const auto bass = bassFilter.process (filtered, 0.018f);
     filtered += bass * parameters.bassBoost * 1.5f;
 
+    const auto mode = clamp (static_cast<float> (parameters.distMode), 0.0f, static_cast<float> (engineCount - 1));
+    const auto engineMode = static_cast<int> (mode);
     const auto preDrive = 1.0f + parameters.drive * 18.0f;
-    const auto distorted = applyDistortion (filtered * preDrive, parameters.distMode) * driveCompensation (parameters.distMode);
+    const auto distorted = applyDistortion (filtered * preDrive,
+                                             engineMode,
+                                             parameters.engineControls[static_cast<size_t> (engineMode)])
+                          * getEngineDescriptor (engineMode).outputCompensation;
     const auto toneCoefficient = clamp (0.025f + parameters.distTone * 0.45f, 0.025f, 0.475f);
     const auto toned = toneFilter.process (distorted, toneCoefficient);
     filtered = filtered * (1.0f - parameters.distMix) + toned * parameters.distMix;
@@ -250,47 +310,114 @@ float AcidEngine::softClip (float x) noexcept
     return std::tanh (x);
 }
 
-float AcidEngine::applyDistortion (float x, int mode) noexcept
+float AcidEngine::applyDistortion (float x, int mode, const EngineControls& controls) noexcept
 {
+    const auto a = clamp (controls.a, 0.0f, 1.0f);
+    const auto b = clamp (controls.b, 0.0f, 1.0f);
+    const auto c = clamp (controls.c, 0.0f, 1.0f);
+
     switch (mode)
     {
+        case 0: // Warm: rounded analog overdrive.
+        {
+            const auto biased = x + (a - 0.5f) * 0.46f;
+            const auto sag = 1.0f - b * 0.34f * std::tanh (std::abs (biased));
+            return std::tanh (biased * (0.82f + c * 0.9f) * sag);
+        }
+
         case 1: // Bite: asymmetric diode-ish clipping.
         {
-            const auto biased = x + 0.22f;
-            return std::tanh (biased * 1.35f) - std::tanh (0.22f * 1.35f);
+            const auto bias = (a - 0.5f) * 0.62f;
+            const auto edge = 0.8f + b * 1.8f;
+            const auto clampAmount = 0.45f + c * 0.55f;
+            return std::tanh ((x + bias) * edge) * clampAmount + x * (1.0f - clampAmount) * 0.22f;
         }
 
         case 2: // Fold: energized wavefolder for liquid squelch.
-            return std::tanh (fold (x * 0.72f) * 1.65f);
+        {
+            const auto symmetry = (b - 0.5f) * 0.7f;
+            const auto folded = fold ((x + symmetry) * (0.8f + a * 2.8f));
+            return std::tanh (folded * (1.1f + c * 1.9f) + x * c * 0.16f);
+        }
 
         case 3: // Fuzz: compressed, hairy square-ish edge.
         {
-            const auto shaped = x >= 0.0f ? 1.0f - std::exp (-std::abs (x))
-                                          : -1.0f + std::exp (-std::abs (x));
-            return std::tanh (shaped * 1.4f);
+            const auto texture = 0.55f + a * 1.6f;
+            const auto gate = b * 0.22f;
+            const auto compressed = x / (1.0f + std::abs (x) * (0.4f + c * 1.8f));
+            const auto shaped = compressed >= 0.0f ? 1.0f - std::exp (-std::abs (compressed) * texture)
+                                                    : -1.0f + std::exp (-std::abs (compressed) * texture);
+            return std::abs (shaped) < gate ? 0.0f : std::tanh (shaped * 2.0f);
         }
 
         case 4: // Zap: brighter electrical crackle without random artifacts.
         {
-            const auto clipped = std::tanh (x * 1.8f);
-            const auto sparkle = std::sin (clipped * 5.0f) * 0.16f;
-            return std::tanh (clipped + sparkle);
+            const auto clipped = std::tanh (x * (1.1f + b * 1.9f));
+            const auto sparkle = std::sin (clipped * (2.8f + a * 9.0f)) * (0.03f + a * 0.22f);
+            const auto air = x - toneFilter.process (x, 0.04f + c * 0.18f);
+            return std::tanh (clipped + sparkle + air * c * 0.32f);
         }
 
-        default: // Warm: rounded analog overdrive.
-            return std::tanh (x);
-    }
-}
+        case 5: // Tube: asymmetrical valve saturation.
+        {
+            const auto bias = (a - 0.5f) * 0.72f;
+            const auto heat = 0.8f + c * 2.0f;
+            const auto hot = std::tanh ((x + bias) * heat);
+            const auto sag = 1.0f - b * 0.38f * std::abs (hot);
+            return std::tanh (hot * sag * 1.45f);
+        }
 
-float AcidEngine::driveCompensation (int mode) noexcept
-{
-    switch (mode)
-    {
-        case 1: return 0.82f;
-        case 2: return 0.76f;
-        case 3: return 0.68f;
-        case 4: return 0.62f;
-        default: return 0.88f;
+        case 6: // Crush: bit depth and sample rate reduction.
+        {
+            const auto levels = std::pow (2.0f, 3.0f + a * 11.0f);
+            const auto rate = 1 + static_cast<int> ((1.0f - b) * 28.0f);
+            const auto jitter = c * std::sin (phase * 29.0f) * 0.18f;
+            if (crushSamplesUntilUpdate-- <= 0)
+            {
+                const auto quantised = std::round (clamp (x + jitter, -1.0f, 1.0f) * levels) / levels;
+                crushHeldSample = quantised;
+                crushSamplesUntilUpdate = rate;
+            }
+            return std::tanh (crushHeldSample * 1.4f);
+        }
+
+        case 7: // Melt: drifting warm saturation and smear.
+        {
+            const auto drift = (a - 0.5f) * 0.25f * std::sin (phase * 3.0f + tapePhase);
+            meltState += (0.015f + b * 0.16f) * ((x + drift) - meltState);
+            return std::tanh ((x * (1.0f - b * 0.42f) + meltState * b * 0.65f) * (0.8f + c * 1.5f));
+        }
+
+        case 8: // Tape: compression with wow and controllable hiss.
+        {
+            tapePhase += 0.00002f + b * 0.00015f;
+            if (tapePhase > 6.2831853f)
+                tapePhase -= 6.2831853f;
+            const auto wow = std::sin (tapePhase) * b * 0.14f;
+            const auto hiss = std::sin (phase * 173.0f + tapePhase * 13.0f) * c * 0.035f;
+            return std::tanh ((x + wow + hiss) * (0.75f + a * 1.5f));
+        }
+
+        case 9: // Ring: frequency modulation and controllable sidebands.
+        {
+            const auto hz = 28.0f + a * 1800.0f;
+            ringPhase += 6.2831853f * hz / static_cast<float> (sampleRate);
+            if (ringPhase > 6.2831853f)
+                ringPhase -= 6.2831853f;
+            const auto carrier = std::sin (ringPhase + (c - 0.5f) * 3.1415926f);
+            const auto ringed = x * carrier;
+            return std::tanh (x * (1.0f - b * 0.72f) + ringed * (0.25f + b * 0.92f));
+        }
+
+        case 10: // Shred: aggressive hard clipping with gate.
+        {
+            const auto threshold = 0.12f + a * 0.84f;
+            const auto clipped = clamp (x * (1.0f + b * 4.0f), -threshold, threshold) / threshold;
+            return std::abs (clipped) < c * 0.24f ? 0.0f : std::tanh (clipped * (1.2f + b * 2.0f));
+        }
+
+        default:
+            return std::tanh (x);
     }
 }
 

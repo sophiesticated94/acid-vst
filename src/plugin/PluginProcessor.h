@@ -3,7 +3,9 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "../dsp/AcidEngine.h"
+#include "../dsp/EngineDescriptor.h"
 #include "../model/PatternBank.h"
+#include "../model/EngineControlBank.h"
 
 #include <array>
 
@@ -47,6 +49,8 @@ public:
     void setStateInformation (const void* data, int sizeInBytes) override;
 
     juce::AudioProcessorValueTreeState& getValueTreeState() noexcept { return apvts; }
+    acidlab::EngineControls getEngineControls (int mode) const noexcept;
+    void setEngineControl (int mode, int control, float value);
 
     acidlab::Step getStep (int index) const;
     void setStep (int index, acidlab::Step step);
@@ -89,6 +93,7 @@ private:
                                const juce::String& author,
                                const juce::String& description) const;
     bool applyPresetVar (const juce::var& preset);
+    void migrateLegacyState (juce::XmlElement& xml) const;
     juce::var createPatternSlotsVar() const;
     void applyPatternSlotsVar (const juce::var& slots);
     juce::File getFactoryPresetDirectory() const;
@@ -100,6 +105,7 @@ private:
     void readPatternFromState();
 
     juce::AudioProcessorValueTreeState apvts;
+    acidlab::EngineControlBank engineControlBank;
     mutable juce::CriticalSection patternLock;
     acidlab::PatternBank patternBank;
     int loadedPresetIndex = -1;

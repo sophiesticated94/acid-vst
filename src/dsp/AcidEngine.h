@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "EngineDescriptor.h"
+#include "Modulation.h"
 #include "../model/PatternBank.h"
 
 namespace acidlab
@@ -27,6 +29,8 @@ struct Parameters
     float accentAttack = 0.35f;
     float clipLevel = 0.85f;
     int distMode = 0;
+    std::array<EngineControls, engineCount> engineControls {};
+    ModulationParameters modulation;
     float drive = 0.35f;
     float distTone = 0.55f;
     float distMix = 0.45f;
@@ -121,8 +125,7 @@ private:
     static float midiNoteToHz (float midiNote) noexcept;
     static float polyBlep (float phase, float phaseInc) noexcept;
     static float softClip (float x) noexcept;
-    static float applyDistortion (float x, int mode) noexcept;
-    static float driveCompensation (int mode) noexcept;
+    float applyDistortion (float x, int mode, const EngineControls& controls) noexcept;
     static float fold (float x) noexcept;
     static float clamp (float value, float low, float high) noexcept;
 
@@ -131,6 +134,7 @@ private:
     float renderSample (const Parameters& parameters);
     float renderVoiceSubSample (const Parameters& parameters, double effectiveSampleRate);
     float applyEffects (float input, const Parameters& parameters);
+    Parameters applyModulation (const Parameters& base, const std::array<float, modulationSourceCount>& sources) const;
     int getOversamplingFactor (int choice) const noexcept;
     double getSamplesPerStep (const Parameters& parameters) const noexcept;
 
@@ -153,6 +157,13 @@ private:
     bool gateOpen = false;
     bool slideActive = false;
     bool externalHeld = false;
+
+    float crushHeldSample = 0.0f;
+    int crushSamplesUntilUpdate = 0;
+    float meltState = 0.0f;
+    float tapePhase = 0.0f;
+    float ringPhase = 0.0f;
+    ModulationEngine modulationEngine;
 
     uint32_t randomState = 0x12345678u;
     OnePole toneFilter;

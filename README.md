@@ -54,16 +54,19 @@ To run VST3 validation when Steinberg's validator is installed:
 .\scripts\validate-vst3.ps1
 ```
 
-## v0.5 Controls
+## v0.7 Controls
 
 - Layout: modern preset sidebar plus tabbed main editor. `Synth` is the default tab; deeper controls live under `Sequencer`, `Mod`, `Effects`, and `Analog`.
-- Engine/theme: Warm, Bite, Fold, Fuzz, and Zap use the existing distortion mode parameter and recolor the global UI accent, step focus, buttons, knobs, and energy strip.
+- Engine/theme: eleven distortion engines use the existing distortion mode parameter and recolor the global UI accent, step focus, buttons, knobs, and performance visual.
+- Engines: Warm, Bite, Fold, Fuzz, Zap, Tube, Crush, Melt, Tape, Ring, and Shred. Each engine has three independently remembered `Character` controls with engine-specific labels and behavior.
 - Synth: waveform, Clean/Acid filter model, tune, pulse width, cutoff, resonance, envelope amount, decay, accent, slide, sub level, volume.
 - Sequencer: 16/32/64 steps, 1/8/1/16/1/32/triplet rates, A-H pattern slots, scale lock, mutation, copy/paste/clear/randomize, per-step note, octave, accent, slide, gate, rest.
 - Mod: modulation-focused performance controls, including mutation, envelope amount, accent, slide, decay, and accent attack.
-- Effects: distortion drive/tone/mix, delay, modulation, reverb, FX tone, and reactive energy strip.
+- Effects: compact engine selector, distortion drive/tone/mix, three adaptive Character controls, delay, modulation, reverb, FX tone, and an engine-specific reactive performance visual.
+- Modulation: three LFOs with free/synced rates and seven shapes, two note-gated ADSR envelopes, and six bipolar matrix slots. Matrix targets include synth, FX, analog, volume, and active-engine Character A/B/C controls.
 - Analog: off/2x/4x oversampling, filter tracking, bass boost, accent attack, clipping level, drift, circuit noise.
 - Presets: factory/user source filtering, text search, category filter, file-based loading, `SAVE` for user presets, and `SAVE AS` for factory or unsaved sounds.
+- Compatibility: preset format v3 preserves engine Character memory and modulation routing. v0.3-v0.5 presets and plugin state migrate legacy Warm/Bite/Fold/Fuzz/Zap choices to their unchanged algorithms.
 - MIDI export: saves the active pattern as a `.mid` file; dragging the MIDI button exports a temporary MIDI file for hosts that accept file drops.
 - UI: custom knob rendering and fixed-aspect resize limits.
 - Pattern banks: save/load `.acidpattern.json` files for A-H pattern slots.
